@@ -2,20 +2,26 @@ import json
 import uuid
 
 from fastapi import WebSocket, WebSocketDisconnect
+from jose import jwt, JWTError
 
+from app.config import settings
 from app.repositories.session_repository import SessionRepository
 from app.services.session_service import process_answer, end_question, build_leaderboard
 from app.ws.connection_manager import manager
 
 
-async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=None):
+async def handle_websocket(ws: WebSocket, repo: SessionRepository):
     """
-    Main WebSocket handler. The client sends a join_session message first,
-    then subsequent game events.
+    Main WebSocket handler for both host and players.
+
+    First message must be one of:
+      - host_connect   { type, pin, token }   — host authenticates via JWT
+      - join_session   { type, pin, display_name }  — player joins by PIN
     """
     await ws.accept()
     pin: str | None = None
     user_id: str | None = None
+    is_host: bool = False
 
     try:
         while True:
@@ -28,8 +34,43 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
 
             event = msg.get("type")
 
-            # ── join_session ──────────────────────────────────────────────────
-            if event == "join_session":
+            # ── host_connect ──────────────────────────────────────────────────
+            if event == "host_connect":
+                token = msg.get("token", "")
+                pin = msg.get("pin")
+
+                # Validate JWT
+                try:
+                    payload = jwt.decode(
+                        token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+                    )
+                    user_id = payload.get("sub")
+                except JWTError:
+                    await manager.send_personal(ws, {"type": "error", "message": "Invalid token"})
+                    await ws.close()
+                    return
+
+                room = await repo.get_room(pin)
+                if not room:
+                    await manager.send_personal(ws, {"type": "error", "message": "Room not found"})
+                    await ws.close()
+                    return
+
+                if str(room["host_id"]) != str(user_id) and payload.get("role") != "admin":
+                    await manager.send_personal(ws, {"type": "error", "message": "Not the host of this session"})
+                    await ws.close()
+                    return
+
+                is_host = True
+                manager.add(pin, ws)
+                await manager.send_personal(ws, {
+                    "type": "host_connected",
+                    "pin": pin,
+                    "player_count": len(room.get("players", {})),
+                })
+
+            # ── join_session (players) ────────────────────────────────────────
+            elif event == "join_session":
                 pin = msg.get("pin")
                 display_name = msg.get("display_name", "Player")
 
@@ -44,8 +85,7 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
                     await ws.close()
                     return
 
-                # Use provided user_id from auth token if available, else random
-                user_id = str(token_user.id) if token_user else str(uuid.uuid4())
+                user_id = str(uuid.uuid4())
 
                 room["players"][user_id] = {
                     "display_name": display_name,
@@ -63,8 +103,8 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
 
             # ── submit_answer ─────────────────────────────────────────────────
             elif event == "submit_answer":
-                if pin is None or user_id is None:
-                    await manager.send_personal(ws, {"type": "error", "message": "Not in a session"})
+                if pin is None or user_id is None or is_host:
+                    await manager.send_personal(ws, {"type": "error", "message": "Not in a session as a player"})
                     continue
 
                 answer = msg.get("answer", "")
@@ -87,9 +127,7 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
                     await manager.broadcast(pin, {
                         "type": "question_end",
                         "correct_answer": q_result["correct_answer"],
-                        "scores": {
-                            uid: p["score"] for uid, p in room["players"].items()
-                        },
+                        "scores": {uid: p["score"] for uid, p in room["players"].items()},
                     })
                     await manager.broadcast(pin, {
                         "type": "leaderboard",
@@ -98,21 +136,16 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
 
             # ── next_question (host only) ──────────────────────────────────────
             elif event == "next_question":
-                if pin is None:
+                if not is_host or pin is None:
+                    await manager.send_personal(ws, {"type": "error", "message": "Only the host can advance questions"})
                     continue
+
                 room = await repo.get_room(pin)
                 if not room:
                     continue
 
-                # Verify host
-                if user_id and str(room.get("host_id")) != user_id:
-                    # Allow admin-role clients too; here we just check host_id
-                    await manager.send_personal(ws, {"type": "error", "message": "Only the host can advance questions"})
-                    continue
-
                 next_idx = room["current_question_index"] + 1
                 if next_idx >= len(room["cards"]):
-                    # No more questions — session finished
                     room["status"] = "finished"
                     await repo.save_room(room)
                     final = build_leaderboard(room["players"])
@@ -122,7 +155,6 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
                     })
                 else:
                     room["current_question_index"] = next_idx
-                    # Reset answered_current for all players
                     for p in room["players"].values():
                         p["answered_current"] = False
                     room["status"] = "in_progress"
@@ -139,8 +171,10 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
 
             # ── end_session (host only) ───────────────────────────────────────
             elif event == "end_session":
-                if pin is None:
+                if not is_host or pin is None:
+                    await manager.send_personal(ws, {"type": "error", "message": "Only the host can end the session"})
                     continue
+
                 room = await repo.get_room(pin)
                 if not room:
                     continue
@@ -153,7 +187,6 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
 
                 await repo.delete_room(pin)
                 await repo.delete_question_states(pin, len(room.get("cards", [])))
-                # Close all connections
                 for conn_ws in list(manager._rooms.get(pin, [])):
                     try:
                         await conn_ws.close()
@@ -166,7 +199,7 @@ async def handle_websocket(ws: WebSocket, repo: SessionRepository, token_user=No
                 await manager.send_personal(ws, {"type": "error", "message": f"Unknown event: {event}"})
 
     except WebSocketDisconnect:
-        if pin and user_id:
+        if pin:
             manager.remove(pin, ws)
     except Exception:
         if pin:

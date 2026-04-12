@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { getToken } from '../api';
 import { useWebSocket } from '../useWebSocket';
 
 export default function SessionGame() {
@@ -17,10 +18,11 @@ export default function SessionGame() {
   const [finished, setFinished] = useState(false);
   const [error, setError] = useState('');
   const timerRef = useRef(null);
-  const isHost = true; // Host screen shows answer counts and Next button
 
   const { connect, send, disconnect } = useWebSocket((msg) => {
     switch (msg.type) {
+      case 'host_connected':
+        break;
       case 'question_start':
         setQuestion(msg);
         setTimeLeft(msg.time_limit);
@@ -65,6 +67,12 @@ export default function SessionGame() {
   useEffect(() => {
     if (!pin) { navigate('/dashboard'); return; }
     const ws = connect();
+    if (ws) {
+      ws.onopen = () => {
+        // Re-register as host so this screen receives all broadcasts
+        send({ type: 'host_connect', pin, token: getToken() });
+      };
+    }
     if (initialQuestion) startTimer(initialQuestion.time_limit);
     return () => { clearInterval(timerRef.current); disconnect(); };
   }, [pin]);

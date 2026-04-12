@@ -129,8 +129,8 @@ async def start_session(
 async def websocket_session(ws: WebSocket, repo: SessionRepository = Depends(get_repo)):
     """
     Single WebSocket endpoint for both host and players.
-    Authentication is optional at connect time — identity is sent in join_session message.
-    Hosts authenticate via JWT; players may join without an account (guest by display_name).
+    Host authenticates via host_connect { token }.
+    Players join via join_session { pin, display_name } — no account required.
     """
     await handle_websocket(ws, repo)
 
