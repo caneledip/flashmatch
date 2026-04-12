@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Environment (keep .env in git since it only has placeholders)
+# .env
+
+# Docker volumes / OS
+.DS_Store
+Thumbs.db

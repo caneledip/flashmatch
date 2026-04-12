@@ -1,0 +1,138 @@
+services:
+
+  # ── API Gateway ────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - user-service
+      - deck-service
+      - quiz-service
+      - frontend
+    networks:
+      - flashmatch-net
+
+  # ── Frontend ───────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    expose:
+      - "5173"
+    networks:
+      - flashmatch-net
+    environment:
+      - VITE_API_BASE_URL=http://localhost
+
+  # ── User Service ───────────────────────────────────────────────────────────
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    expose:
+      - "8000"
+    depends_on:
+      user-db:
+        condition: service_healthy
+    networks:
+      - flashmatch-net
+    env_file:
+      - .env
+    environment:
+      - PORT=8000
+
+  # ── Deck Service ───────────────────────────────────────────────────────────
+  deck-service:
+    build:
+      context: ./deck-service
+      dockerfile: Dockerfile
+    expose:
+      - "8001"
+    depends_on:
+      deck-db:
+        condition: service_healthy
+    networks:
+      - flashmatch-net
+    env_file:
+      - .env
+    environment:
+      - PORT=8001
+
+  # ── Quiz Session Service ───────────────────────────────────────────────────
+  quiz-service:
+    build:
+      context: ./quiz-session-service
+      dockerfile: Dockerfile
+    expose:
+      - "8002"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - flashmatch-net
+    env_file:
+      - .env
+    environment:
+      - PORT=8002
+
+  # ── User PostgreSQL ────────────────────────────────────────────────────────
+  user-db:
+    image: postgres:16-alpine
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: user_admin
+      POSTGRES_PASSWORD: user_pass
+      POSTGRES_DB: userdb
+    volumes:
+      - user-db-data:/var/lib/postgresql/data
+    networks:
+      - flashmatch-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user_admin -d userdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Deck PostgreSQL ────────────────────────────────────────────────────────
+  deck-db:
+    image: postgres:16-alpine
+    expose:
+      - "5433"
+    environment:
+      POSTGRES_USER: deck_admin
+      POSTGRES_PASSWORD: deck_pass
+      POSTGRES_DB: deckdb
+    volumes:
+      - deck-db-data:/var/lib/postgresql/data
+    networks:
+      - flashmatch-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deck_admin -d deckdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    networks:
+      - flashmatch-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  user-db-data:
+  deck-db-data:
+
+networks:
+  flashmatch-net:
+    driver: bridge
