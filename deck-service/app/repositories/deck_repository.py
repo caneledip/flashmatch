@@ -45,22 +45,27 @@ class DeckRepository:
         )
         return list(result.scalars().all())
 
+    async def _reload(self, deck_id: uuid.UUID) -> Deck:
+        """Reload a deck with flashcards eagerly loaded to avoid async greenlet issues."""
+        result = await self.db.execute(
+            select(Deck).where(Deck.id == deck_id).options(selectinload(Deck.flashcards))
+        )
+        return result.scalar_one()
+
     async def create(
         self, owner_id: uuid.UUID, title: str, description: str | None, is_public: bool
     ) -> Deck:
         deck = Deck(owner_id=owner_id, title=title, description=description, is_public=is_public)
         self.db.add(deck)
         await self.db.commit()
-        await self.db.refresh(deck)
-        return deck
+        return await self._reload(deck.id)
 
     async def update(self, deck: Deck, **fields) -> Deck:
         for key, value in fields.items():
             if value is not None:
                 setattr(deck, key, value)
         await self.db.commit()
-        await self.db.refresh(deck)
-        return deck
+        return await self._reload(deck.id)
 
     async def delete(self, deck: Deck) -> None:
         await self.db.delete(deck)
