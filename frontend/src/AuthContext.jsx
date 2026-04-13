@@ -27,6 +27,7 @@ export function AuthProvider({ children }) {
   function logout() {
     clearToken();
     setUser(null);
+    window.location.href = '/';
   }
 
   return (
