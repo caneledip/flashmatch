@@ -34,7 +34,9 @@ export default function SessionLobby() {
     const ws = connect();
     if (ws) {
       ws.onopen = () => {
-        send({ type: 'host_connect', pin, token: getToken() });
+        // Use ws.send() directly — avoids the wsRef.current race condition
+        // caused by React StrictMode closing the previous WS asynchronously.
+        ws.send(JSON.stringify({ type: 'host_connect', pin, token: getToken() }));
       };
     }
     return () => disconnect();

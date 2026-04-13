@@ -17,8 +17,13 @@ export function useWebSocket(onMessage) {
       } catch { /* ignore */ }
     };
 
+    // Guard: only clear the ref if this specific WS is still the current one.
+    // Without this, a stale onclose from a previous WS (closed by StrictMode cleanup)
+    // will null out the ref for the NEW connection, breaking all subsequent sends.
     ws.onclose = () => {
-      wsRef.current = null;
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
     };
 
     return ws;

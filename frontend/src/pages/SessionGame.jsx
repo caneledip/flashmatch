@@ -69,8 +69,7 @@ export default function SessionGame() {
     const ws = connect();
     if (ws) {
       ws.onopen = () => {
-        // Re-register as host so this screen receives all broadcasts
-        send({ type: 'host_connect', pin, token: getToken() });
+        ws.send(JSON.stringify({ type: 'host_connect', pin, token: getToken() }));
       };
     }
     if (initialQuestion) startTimer(initialQuestion.time_limit);
